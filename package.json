@@ -1,0 +1,33 @@
+{
+  "name": "trade-resolver",
+  "version": "1.0.0",
+  "description": "Polywatch trade resolution tracker — classifies whale trade outcomes after Polymarket market resolution",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "backfill": "tsx src/jobs/seed_backfill.ts",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1",
+    "mongodb": "^6.12.0",
+    "p-retry": "^6.2.1",
+    "pino": "^9.6.0",
+    "undici": "^6.21.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
