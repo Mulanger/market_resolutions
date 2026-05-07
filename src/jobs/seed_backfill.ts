@@ -21,7 +21,6 @@ import { loadConfig } from '../config.js';
 import { getLogger } from '../logger.js';
 import { connectMongo, closeMongo } from '../db/mongo.js';
 import { ensureIndexes } from '../db/indexes.js';
-import { connectRedis, closeRedis } from '../redis/publisher.js';
 import { fetchMarketsBatched } from '../polymarket/client.js';
 import { classifyResolution, type ResolutionView } from '../pipeline/classify_resolution.js';
 import {
@@ -56,11 +55,6 @@ async function main(): Promise<void> {
 
   const { marketResolutions, tradeOutcomes, trades } = await connectMongo();
   await ensureIndexes(marketResolutions, tradeOutcomes);
-
-  // Redis is needed by classifier-side imports (queue) but the inline
-  // materialization path bypasses the queue; we still connect to keep
-  // shutdown symmetric.
-  await connectRedis();
 
   const now = Math.floor(Date.now() / 1000);
   const nowDate = new Date(now * 1000);
@@ -169,7 +163,7 @@ async function main(): Promise<void> {
     'seed_backfill complete',
   );
 
-  await Promise.all([closeMongo(), closeRedis()]);
+  await closeMongo();
   process.exit(0);
 }
 
