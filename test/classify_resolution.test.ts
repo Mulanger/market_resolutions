@@ -194,4 +194,14 @@ describe('classifyResolution', () => {
     expect(v.status).toBe('resolved');
     expect(v.winningOutcome).toBe('YES');
   });
+
+  it('does not treat near-final prices as authoritative resolution', () => {
+    const v = classifyResolution(
+      fakeMarket({ closed: true, outcomePrices: ['0.999', '0.001'] }),
+      null,
+      NOW,
+    );
+    expect(v.status).toBe('closed');
+    expect(v.winningOutcome).toBeNull();
+  });
 });

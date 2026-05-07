@@ -23,21 +23,42 @@ const agent = new Agent({ keepAliveTimeout: 30_000, connections: 10 });
 
 class RetriableError extends Error {}
 
+type QueryValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly (string | number | boolean)[];
+
 // ---------------------------------------------------------------------------
 // Generic GET helper (same shape as whale-watcher)
 // ---------------------------------------------------------------------------
 
+export function buildUrl(
+  baseUrl: string,
+  path: string,
+  query: Record<string, QueryValue>,
+): URL {
+  const url = new URL(path, baseUrl);
+  for (const [k, v] of Object.entries(query)) {
+    if (v == null) continue;
+    if (Array.isArray(v)) {
+      for (const item of v) url.searchParams.append(k, String(item));
+    } else {
+      url.searchParams.set(k, String(v));
+    }
+  }
+  return url;
+}
+
 async function get<T>(
   baseUrl: string,
   path: string,
-  query: Record<string, unknown>,
+  query: Record<string, QueryValue>,
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T> {
-  const url = new URL(path, baseUrl);
-  for (const [k, v] of Object.entries(query)) {
-    if (v != null) url.searchParams.set(k, String(v));
-  }
-
+  const url = buildUrl(baseUrl, path, query);
   return pRetry(
     async () => {
       const res = await request(url, { dispatcher: agent, method: 'GET' });
@@ -68,13 +89,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function getMarketsByConditionIds(
   conditionIds: string[],
+  opts: { closed?: boolean } = {},
 ): Promise<GammaMarket[]> {
   const config = loadConfig();
-  const csv = conditionIds.join(',');
   return get(
     config.polymarketGammaUrl,
     '/markets',
-    { condition_ids: csv },
+    {
+      condition_ids: conditionIds,
+      closed: opts.closed,
+      limit: Math.max(100, conditionIds.length),
+    },
     GammaMarketSchema.array(),
   );
 }
@@ -93,8 +118,17 @@ export async function fetchMarketsBatched(
   for (let i = 0; i < conditionIds.length; i += chunkSize) {
     const chunk = conditionIds.slice(i, i + chunkSize);
     log.debug({ count: chunk.length, offset: i }, 'fetching Gamma market chunk');
-    const markets = await getMarketsByConditionIds(chunk);
-    results.push(...markets);
+    const requested = new Set(chunk.map((id) => id.toLowerCase()));
+    const [openMarkets, closedMarkets] = await Promise.all([
+      getMarketsByConditionIds(chunk, { closed: false }),
+      getMarketsByConditionIds(chunk, { closed: true }),
+    ]);
+
+    for (const market of [...openMarkets, ...closedMarkets]) {
+      if (requested.has(market.conditionId.toLowerCase())) {
+        results.push(market);
+      }
+    }
     if (i + chunkSize < conditionIds.length) {
       await sleep(150); // be polite to Gamma (5 RPS burst max)
     }

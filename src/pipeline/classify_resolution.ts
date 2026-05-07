@@ -14,7 +14,10 @@
  * previously-resolved market. See pipeline/resolution_scanner.ts.
  */
 import type { GammaMarket } from '../polymarket/schemas.js';
-import { parseOutcomePriceCents } from '../polymarket/schemas.js';
+import {
+  parseOutcomePrice,
+  parseOutcomePriceCents,
+} from '../polymarket/schemas.js';
 import type { MarketResolutionStatus } from '../db/outcomes.js';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +72,8 @@ export function classifyResolution(
 ): ResolutionView {
   const yes = parseOutcomePriceCents(market, 0);
   const no = parseOutcomePriceCents(market, 1);
+  const yesRaw = parseOutcomePrice(market.outcomePrices, 0);
+  const noRaw = parseOutcomePrice(market.outcomePrices, 1);
 
   // Market is "done" when closed=true OR active=false (belt-and-braces)
   const isClosed =
@@ -78,7 +83,8 @@ export function classifyResolution(
 
   // Authoritative outcome: exactly one price at 100¢ and the other at 0¢
   const hasAuthoritative =
-    (yes === 100 && no === 0) || (yes === 0 && no === 100);
+    (isFinalPrice(yesRaw, 1) && isFinalPrice(noRaw, 0)) ||
+    (isFinalPrice(yesRaw, 0) && isFinalPrice(noRaw, 1));
 
   // UMA pipeline: treat absent umaResolutionStatus as "no objection"
   const umaOk =
@@ -143,4 +149,8 @@ function parseOutcomesArray(value: unknown): string[] | null {
     }
   }
   return null;
+}
+
+function isFinalPrice(value: number | null, expected: 0 | 1): boolean {
+  return value !== null && Math.abs(value - expected) < 1e-9;
 }
