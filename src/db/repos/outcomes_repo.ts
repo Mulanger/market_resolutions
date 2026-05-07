@@ -10,6 +10,7 @@ import type {
   AnyBulkWriteOperation,
   Filter,
 } from 'mongodb';
+import { MongoBulkWriteError } from 'mongodb';
 import type { TradeOutcomeDoc } from '../outcomes.js';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,8 @@ export async function countOutcomes(
 /**
  * Bulk-upsert a batch of outcome docs.
  *
- * Idempotency guard: filter is `frozenAt: { $exists: false }` so once a trade
+ * Idempotency guard: existing rows with a non-null `frozenAt` are skipped before
+ * the write, and the update filter only matches missing/open rows. Once a trade
  * outcome is frozen we never overwrite it.
  *
  * `firstMaterializedAt` is split out so it appears only in `$setOnInsert`
@@ -64,7 +66,22 @@ export async function bulkUpsertOutcomes(
 ): Promise<number> {
   if (docs.length === 0) return 0;
 
-  const ops: AnyBulkWriteOperation<TradeOutcomeDoc>[] = docs.map((doc) => {
+  const uniqueDocs = Array.from(new Map(docs.map((doc) => [doc._id, doc])).values());
+  const existing = await col
+    .find(
+      { _id: { $in: uniqueDocs.map((doc) => doc._id) } },
+      { projection: { _id: 1, frozenAt: 1 } },
+    )
+    .toArray();
+  const frozenIds = new Set(
+    existing
+      .filter((doc) => doc.frozenAt != null)
+      .map((doc) => doc._id),
+  );
+
+  const ops: AnyBulkWriteOperation<TradeOutcomeDoc>[] = uniqueDocs
+    .filter((doc) => !frozenIds.has(doc._id))
+    .map((doc) => {
     // Strip firstMaterializedAt from the $set payload — it is owned by
     // $setOnInsert. We use the value already on `doc` if provided, otherwise now.
     const { firstMaterializedAt, ...rest } = doc;
@@ -73,7 +90,7 @@ export async function bulkUpsertOutcomes(
       updateOne: {
         filter: {
           _id: doc._id,
-          frozenAt: { $exists: false },
+          $or: [{ frozenAt: { $exists: false } }, { frozenAt: null }],
         } as Filter<TradeOutcomeDoc>,
         update: {
           $set: rest as Partial<TradeOutcomeDoc>,
@@ -85,8 +102,31 @@ export async function bulkUpsertOutcomes(
       },
     };
   });
+  if (ops.length === 0) return 0;
 
-  const result = await col.bulkWrite(ops, { ordered: false });
-  return result.upsertedCount + result.modifiedCount;
+  try {
+    const result = await col.bulkWrite(ops, { ordered: false });
+    return result.upsertedCount + result.modifiedCount;
+  } catch (err) {
+    if (isDuplicateKeyOnlyBulkError(err)) {
+      const result = err.result as
+        | { upsertedCount?: number; modifiedCount?: number }
+        | undefined;
+      return (result?.upsertedCount ?? 0) + (result?.modifiedCount ?? 0);
+    }
+    throw err;
+  }
 }
 
+function isDuplicateKeyOnlyBulkError(
+  err: unknown,
+): err is MongoBulkWriteError {
+  if (!(err instanceof MongoBulkWriteError)) return false;
+  const writeErrors = err.writeErrors as unknown;
+  if (!Array.isArray(writeErrors) || writeErrors.length === 0) return false;
+  return writeErrors.every((e) => (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as { code?: number }).code === 11000
+  ));
+}
